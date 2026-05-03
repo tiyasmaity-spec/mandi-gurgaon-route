@@ -239,6 +239,12 @@ def build_map(route_data, best_name=None):
 st.title("🛣️ Route Recommender")
 st.caption("Mandi House → IFFCO Chowk  ·  Real-time TomTom Travel Time  ·  Fuzzy AHP Scoring")
 
+# Initialise session state
+if "results" not in st.session_state:
+    st.session_state.results = None
+if "route_data" not in st.session_state:
+    st.session_state.route_data = None
+
 col_form, col_map = st.columns([1, 1.6], gap="large")
 
 with col_form:
@@ -267,24 +273,26 @@ with col_form:
                     use_container_width=True)
 
 # ─────────────────────────────────────────────────────────────
-# RESULTS
+# FETCH ROUTE DATA (cached — only runs once per 5 min)
 # ─────────────────────────────────────────────────────────────
-with col_map:
-    st.subheader("Route map")
-
-    # Always fetch route geometry for map
+if st.session_state.route_data is None:
     with st.spinner("Loading live route data from TomTom..."):
         route_data = {}
         for rname in NETWORK:
             tt, coords = fetch_route(rname)
             route_data[rname] = (tt, coords)
+        st.session_state.route_data = route_data
+else:
+    route_data = st.session_state.route_data
 
-    if not run:
-        m = build_map(route_data)
-        st_folium(m, width=700, height=480)
-        st.caption("Fill your travel profile and click **Find best route**.")
+# ─────────────────────────────────────────────────────────────
+# RESULTS
+# ─────────────────────────────────────────────────────────────
+with col_map:
+    st.subheader("Route map")
 
-    else:
+    # When button clicked — compute and store results in session state
+    if run:
         user = {
             "commuter_type":   commuter_type,
             "trip_purpose":    trip_purpose,
@@ -295,7 +303,6 @@ with col_map:
             "buffer_time_min": buffer_time_min if buffer_kept=="Yes" else 0,
         }
 
-        # Score routes
         routes_scored = []
         for rname, rdata in NETWORK.items():
             tt, coords = route_data[rname]
@@ -309,6 +316,17 @@ with col_map:
             routes_scored.append(entry)
 
         routes_scored.sort(key=lambda x: x["score"], reverse=True)
+        # Store in session state so results persist
+        st.session_state.results = routes_scored
+
+    # Show results if they exist in session state
+    if st.session_state.results is None:
+        m = build_map(route_data)
+        st_folium(m, width=700, height=480)
+        st.caption("Fill your travel profile and click **Find best route**.")
+
+    else:
+        routes_scored = st.session_state.results
         best = routes_scored[0]
 
         # Map with best route highlighted

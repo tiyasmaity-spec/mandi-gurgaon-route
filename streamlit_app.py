@@ -31,24 +31,35 @@ ROUTE_COLORS = {
 
 # ─────────────────────────────────────────────────────────────
 # DYNAMIC BTI + NETWORK BT PER TIME BAND
-# Source: traffic_final_cd_corrected.xlsx — Route1_SPM & Route2_RTR
-# Values: corridor avg BTI (Mon–Fri mean) × corridor total avg TT
+# Source: traffic_final_cd_corrected.xlsx
+#   BT_Summary_SPM / BT_Summary_RTR sheets
+#   "CORRIDOR TOTAL Buffer Time (min) — Sum across all links"
+#   Values = weekday MEAN column (Mon–Fri mean)
 # ─────────────────────────────────────────────────────────────
-#          EMP      BMP      MP       IP       EP       EAP
-# Hours:  1–6     6–9     9–12    12–16    16–20    20–24
 
-BAND_BTI = {
+# CORRIDOR TOTAL BUFFER TIME (min) — directly from BT_Summary sheets
+# SPM — Mon–Fri Mean column
+BAND_NETWORK_BT = {
     "Route 1 — Sardar Patel Marg (SPM)": {
-        "EMP": 0.1903, "BMP": 0.3142, "MP": 0.5368,
-        "IP":  0.4107, "EP":  0.5098, "EAP": 0.2925,
+        "EMP":  5.90,   # Early Morning   1:00– 6:00  mean = 5.90
+        "BMP": 12.06,   # Before MP       6:00– 9:00  mean = 12.06
+        "MP":  29.88,   # Morning Peak    9:00–12:00  mean = 29.88
+        "IP":  18.73,   # Inter Peak     12:00–16:00  mean = 18.73
+        "EP":  26.01,   # Evening Peak   16:00–20:00  mean = 26.01
+        "EAP": 11.60,   # Eve after peak 20:00–24:00  mean = 11.60
     },
+    # RTR — Mon–Fri Mean column
     "Route 2 — Rao Tularam Marg (RTR)": {
-        "EMP": 0.1793, "BMP": 0.2996, "MP": 0.5122,
-        "IP":  0.3894, "EP":  0.4835, "EAP": 0.2779,
+        "EMP":  5.69,   # Early Morning   1:00– 6:00  mean =  5.69
+        "BMP": 11.52,   # Before MP       6:00– 9:00  mean = 11.52
+        "MP":  28.49,   # Morning Peak    9:00–12:00  mean = 28.49
+        "IP":  17.65,   # Inter Peak     12:00–16:00  mean = 17.65
+        "EP":  25.11,   # Evening Peak   16:00–20:00  mean = 25.11
+        "EAP": 10.90,   # Eve after peak 20:00–24:00  mean = 10.90
     },
 }
 
-# Corridor total avg TT per band (Mon–Fri mean, minutes)
+# Corridor total avg TT per band (Mon–Fri mean, minutes) — Route1_SPM sheet
 BAND_NETWORK_TT = {
     "Route 1 — Sardar Patel Marg (SPM)": {
         "EMP": 35.87, "BMP": 43.88, "MP": 63.13,
@@ -60,16 +71,13 @@ BAND_NETWORK_TT = {
     },
 }
 
-# Network BT = BTI × network TT (pre-computed for reference)
-BAND_NETWORK_BT = {
-    "Route 1 — Sardar Patel Marg (SPM)": {
-        "EMP": 6.83,  "BMP": 13.79, "MP": 33.89,
-        "IP":  21.38, "EP":  29.69, "EAP": 13.29,
-    },
-    "Route 2 — Rao Tularam Marg (RTR)": {
-        "EMP": 6.28,  "BMP": 12.84, "MP": 31.45,
-        "IP":  19.56, "EP":  27.83, "EAP": 12.04,
-    },
+# BTI derived from exact BT and TT: BTI = BT / TT
+BAND_BTI = {
+    rname: {
+        band: round(BAND_NETWORK_BT[rname][band] / BAND_NETWORK_TT[rname][band], 4)
+        for band in ["EMP","BMP","MP","IP","EP","EAP"]
+    }
+    for rname in BAND_NETWORK_BT
 }
 
 def get_time_band():
@@ -164,13 +172,17 @@ def fetch_route(route_name):
 
 # ─────────────────────────────────────────────────────────────
 # DYNAMIC NETWORK BT
-# bt = band_BTI × live_TT  (live TT from TomTom, BTI from traffic data)
+# Base BT = exact corridor total from BT_Summary sheet (mean col)
+# Scaled by live TT ratio: bt_live = bt_base × (live_TT / network_TT)
+# This preserves the real-data BT but adjusts for live congestion
 # ─────────────────────────────────────────────────────────────
 def get_dynamic_bt(route_name, live_tt, band):
-    """Network buffer demand = band-specific BTI × live travel time."""
-    bti = BAND_BTI[route_name][band]
-    bt  = round(bti * live_tt, 1)
-    return bt, bti
+    bt_base  = BAND_NETWORK_BT[route_name][band]      # exact from Excel
+    tt_base  = BAND_NETWORK_TT[route_name][band]      # network avg TT
+    bti      = BAND_BTI[route_name][band]             # derived BTI = bt/tt
+    # Scale BT proportionally to how live TT differs from network avg TT
+    bt_live  = round(bt_base * (live_tt / tt_base), 1)
+    return bt_live, bti
 
 # ─────────────────────────────────────────────────────────────
 # SCORING ENGINE

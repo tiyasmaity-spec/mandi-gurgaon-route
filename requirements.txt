@@ -1,5 +1,7 @@
 streamlit
+requests
 folium
 streamlit-folium
-requests
 plotly
+pytz
+pandas

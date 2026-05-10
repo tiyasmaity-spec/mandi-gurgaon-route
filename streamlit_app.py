@@ -193,63 +193,101 @@ def get_dynamic_bt(route_name, live_tt, band):
 # SCORING ENGINE
 # ─────────────────────────────────────────────────────────────
 def score_route(route, user, tt, bt, bti):
-    w = WEIGHTS
-    s = {}
+    w    = WEIGHTS
+    s    = {}
+    circ = route["circularity"]
 
-    # Buffer Kept (w=0.284)
+    # Normalise all metrics to 0→1 scale
+    bti_n  = min(bti,  1.5) / 1.5
+    tt_n   = min(tt,   90)  / 90
+    circ_n = min(circ, 2.0) / 2.0
+    bt_n   = min(bt,   40)  / 40
+
+    # Scores where HIGH = better for the user
+    rel_score  = 1 - bti_n    # reliability:  low BTI  → high score → RTR favoured
+    spd_score  = 1 - tt_n     # speed:        low TT   → high score → SPM slight edge
+    dir_score  = 1 - circ_n   # directness:   low circ → high score → SPM favoured
+    buf_score  = 1 - bt_n     # low BT demand → high score → RTR favoured
+
+    # ── Buffer Kept (w=0.284) ─────────────────────────────────────────
+    # YES + surplus buffer  → comfort, reliability matters → rel_score
+    # YES + deficit buffer  → delay risk → penalise high BT demand → buf_score
+    # NO                   → speed matters → spd_score
     if user["buffer_kept"] == "Yes":
-        s["buffer_kept"] = 1 - min(bt, 40) / 40
+        buf  = user["buffer_time_min"]
+        gap  = buf - bt
+        if gap >= 0:
+            # Covered — comfort mode, weight reliability
+            alpha = min(1.0, gap / 20.0)          # 0 at gap=0, 1 at gap≥20
+            s["buffer_kept"] = alpha*rel_score + (1-alpha)*buf_score
+        else:
+            # Under-buffered — this route is risky, penalise proportional to deficit
+            s["buffer_kept"] = max(0.0, buf_score + gap/40.0)
     else:
-        s["buffer_kept"] = 1 - min(tt, 90) / 90
+        s["buffer_kept"] = 0.6*spd_score + 0.4*dir_score   # No buffer → speed+directness
 
-    # Commuter Type (w=0.253)
+    # ── Commuter Type (w=0.253) ───────────────────────────────────────
+    # Regular   → reliability is top priority → rel_score
+    # Non-reg   → directness/simplicity → dir_score (don't know route well)
     if user["commuter_type"] == "Regular":
-        s["commuter_type"] = 1 - min(bti, 1.5) / 1.5
+        s["commuter_type"] = rel_score
     else:
-        s["commuter_type"] = 1 - route["circularity"] / 2.0
+        s["commuter_type"] = 0.4*rel_score + 0.6*dir_score
 
-    # Buffer Time (w=0.177) — asymmetric gap penalty
+    # ── Buffer Time (w=0.177) ─────────────────────────────────────────
+    # How well does the user's buffer match this route's demand?
+    # Perfect match (gap≈0) = 0.5, large surplus = 1.0, large deficit = 0.0
     gap = user["buffer_time_min"] - bt
-    if gap >= 0:
-        s["buffer_time"] = min(1.0, 0.5 + gap / 40.0)   # surplus: moderate boost
-    else:
-        s["buffer_time"] = max(0.0, 0.5 + gap / 20.0)   # deficit: steep penalty
+    s["buffer_time"] = max(0.0, min(1.0, 0.5 + gap / 40.0))
 
-    # Route Following (w=0.157)
-    follow_map = {
-        "Flexible — switches when needed": 0.8,
-        "Partially follow":                0.5,
-        "Habitual — stays on known route": 0.3,
+    # ── Route Following (w=0.157) ─────────────────────────────────────
+    # Flexible  → can react to congestion → reliability matters → rel_score
+    # Habitual  → stays on route regardless → directness matters → dir_score
+    # Partial   → balanced
+    follow_rel = {
+        "Flexible — switches when needed": 0.85,
+        "Partially follow":                0.50,
+        "Habitual — stays on known route": 0.15,
     }
-    fw = follow_map.get(user["route_following"], 0.5)
-    s["route_following"] = (fw * (1 - min(bti,1.5)/1.5) +
-                            (1-fw) * (1 - route["circularity"]/2.0))
+    fw = follow_rel.get(user["route_following"], 0.5)
+    s["route_following"] = fw*rel_score + (1-fw)*dir_score
 
-    # Trip Purpose (w=0.111)
+    # ── Trip Purpose (w=0.111) ────────────────────────────────────────
+    # Medical        → speed critical   → spd_score dominant
+    # Work           → balanced speed + reliability
+    # Education      → reliability (fixed schedule)
+    # Social/Leisure → directness (ease of navigation)
     purpose_map = {
-        "Work":           0.7*(1-min(tt,90)/90) + 0.3*(1-min(bti,1.5)/1.5),
-        "Education":      1 - min(bti,1.5)/1.5,
-        "Medical":        1 - min(tt,90)/90,
-        "Social/Leisure": 1 - route["circularity"]/2.0,
+        "Work":           0.4*spd_score + 0.6*rel_score,
+        "Education":      0.2*spd_score + 0.8*rel_score,
+        "Medical":        0.8*spd_score + 0.2*rel_score,
+        "Social/Leisure": 0.3*spd_score + 0.2*rel_score + 0.5*dir_score,
     }
     s["trip_purpose"] = purpose_map.get(user["trip_purpose"], 0.5)
 
-    # Delay Threshold (w=0.066)
-    thresh_map = {"1–2 min":0.9,"2–5 min":0.7,"5–10 min":0.4,"More than 10 min":0.2}
-    s["delay_threshold"] = thresh_map.get(user["delay_threshold"],0.5) * (1-min(bti,1.5)/1.5)
+    # ── Delay Threshold (w=0.066) ─────────────────────────────────────
+    # 1-2 min  → zero tolerance → reliability critical → rel_score
+    # 10+ min  → tolerant → speed sufficient → spd_score
+    thresh_rel = {"1–2 min":0.9,"2–5 min":0.65,"5–10 min":0.35,"More than 10 min":0.1}
+    tr = thresh_rel.get(user["delay_threshold"], 0.5)
+    s["delay_threshold"] = tr*rel_score + (1-tr)*spd_score
 
-    # Occupation (w=0.066)
+    # ── Occupation (w=0.066) ──────────────────────────────────────────
+    # Driver/commercial → time = money → speed dominant
+    # Student           → fixed schedule → reliability dominant
+    # Professional      → balanced
+    # Self-employed/Homemaker → flexible → directness valued
     occ_map = {
-        "Working Professional":    0.6*(1-min(tt,90)/90)+0.4*(1-min(bti,1.5)/1.5),
-        "Cab / Commercial Driver": 1-min(tt,90)/90,
-        "Student":                 1-min(bti,1.5)/1.5,
-        "Self-employed":           1-route["circularity"]/2.0,
-        "Homemaker":               1-route["circularity"]/2.0,
+        "Working Professional":    0.35*spd_score + 0.65*rel_score,
+        "Cab / Commercial Driver": 0.80*spd_score + 0.20*rel_score,
+        "Student":                 0.20*spd_score + 0.80*rel_score,
+        "Self-employed":           0.30*spd_score + 0.30*rel_score + 0.40*dir_score,
+        "Homemaker":               0.25*spd_score + 0.25*rel_score + 0.50*dir_score,
     }
     s["occupation"] = occ_map.get(user["occupation"], 0.5)
 
-    total = sum(s[k]*w[k] for k in s)
-    score = round(max(0, min(100, (total/sum(w.values()))*100)))
+    total = sum(s[k] * w[k] for k in s)
+    score = round(max(0, min(100, (total / sum(w.values())) * 100)))
     return score, s
 
 # ─────────────────────────────────────────────────────────────

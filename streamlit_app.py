@@ -32,34 +32,27 @@ ROUTE_COLORS = {
 # ─────────────────────────────────────────────────────────────
 # DYNAMIC BTI + NETWORK BT PER TIME BAND
 # Source: traffic_final_cd_corrected.xlsx
-#   BT_Summary_SPM / BT_Summary_RTR sheets
-#   "CORRIDOR TOTAL Buffer Time (min) — Sum across all links"
-#   Values = weekday MEAN column (Mon–Fri mean)
+#   BT_Summary_SPM / BT_Summary_RTR — CORRIDOR TOTAL BT (Mon–Fri mean)
+#
+# BTI per band = measured_BTI × (band_BT / EP_BT)
+#   Measured BTI: SPM=0.702, RTR=0.617  (from traffic data, EP reference)
+#   This preserves the REAL difference between routes while allowing
+#   the BTI to vary correctly across time bands
 # ─────────────────────────────────────────────────────────────
 
-# CORRIDOR TOTAL BUFFER TIME (min) — directly from BT_Summary sheets
-# SPM — Mon–Fri Mean column
+# CORRIDOR TOTAL BUFFER TIME (min) — directly from BT_Summary sheets, Mon–Fri Mean
 BAND_NETWORK_BT = {
     "Route 1 — Sardar Patel Marg (SPM)": {
-        "EMP":  5.90,   # Early Morning   1:00– 6:00  mean = 5.90
-        "BMP": 12.06,   # Before MP       6:00– 9:00  mean = 12.06
-        "MP":  29.88,   # Morning Peak    9:00–12:00  mean = 29.88
-        "IP":  18.73,   # Inter Peak     12:00–16:00  mean = 18.73
-        "EP":  26.01,   # Evening Peak   16:00–20:00  mean = 26.01
-        "EAP": 11.60,   # Eve after peak 20:00–24:00  mean = 11.60
+        "EMP":  5.90, "BMP": 12.06, "MP": 29.88,
+        "IP":  18.73, "EP":  26.01, "EAP": 11.60,
     },
-    # RTR — Mon–Fri Mean column
     "Route 2 — Rao Tularam Marg (RTR)": {
-        "EMP":  5.69,   # Early Morning   1:00– 6:00  mean =  5.69
-        "BMP": 11.52,   # Before MP       6:00– 9:00  mean = 11.52
-        "MP":  28.49,   # Morning Peak    9:00–12:00  mean = 28.49
-        "IP":  17.65,   # Inter Peak     12:00–16:00  mean = 17.65
-        "EP":  25.11,   # Evening Peak   16:00–20:00  mean = 25.11
-        "EAP": 10.90,   # Eve after peak 20:00–24:00  mean = 10.90
+        "EMP":  5.69, "BMP": 11.52, "MP": 28.49,
+        "IP":  17.65, "EP":  25.11, "EAP": 10.90,
     },
 }
 
-# Corridor total avg TT per band (Mon–Fri mean, minutes) — Route1_SPM sheet
+# Corridor total avg TT per band (Mon–Fri mean, minutes)
 BAND_NETWORK_TT = {
     "Route 1 — Sardar Patel Marg (SPM)": {
         "EMP": 35.87, "BMP": 43.88, "MP": 63.13,
@@ -71,10 +64,22 @@ BAND_NETWORK_TT = {
     },
 }
 
-# BTI derived from exact BT and TT: BTI = BT / TT
+# Measured BTI from traffic data (EP band reference — peak congestion)
+MEASURED_BTI = {
+    "Route 1 — Sardar Patel Marg (SPM)": 0.702,
+    "Route 2 — Rao Tularam Marg (RTR)":  0.617,
+}
+
+# Band-specific BTI = measured_BTI × (band_BT / EP_BT)
+# EP is the reference band (measured BTI was derived from EP conditions)
+# This scales the real BTI difference up/down across bands correctly
 BAND_BTI = {
     rname: {
-        band: round(BAND_NETWORK_BT[rname][band] / BAND_NETWORK_TT[rname][band], 4)
+        band: round(
+            MEASURED_BTI[rname] *
+            (BAND_NETWORK_BT[rname][band] / BAND_NETWORK_BT[rname]["EP"]),
+            4
+        )
         for band in ["EMP","BMP","MP","IP","EP","EAP"]
     }
     for rname in BAND_NETWORK_BT

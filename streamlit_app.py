@@ -21,18 +21,8 @@ TOMTOM_KEY = "imAYgDRcFJmRBP4UKTdxWdgQp6LqZ9Rg"
 ORIGIN     = "28.6270,77.2390"
 DEST       = "28.5290,77.0940"
 WAYPOINTS  = {
-    "Route 1 — Sardar Patel Marg (SPM)": [
-        "28.6215,77.2195",   # Jaswant Singh Rd
-        "28.6128,77.2101",   # Udyog Bhawan
-        "28.5870,77.1788",   # Sardar Patel Marg
-        "28.5660,77.1490",   # Dhaula Kuan merge
-    ],
-    "Route 2 — Rao Tularam Marg (RTR)": [
-        "28.6128,77.2101",   # Udyog Bhawan (shared)
-        "28.5982,77.1952",   # Teen Murti Haifa
-        "28.5780,77.1620",   # Rao Tularam Marg
-        "28.5650,77.1330",   # Outer Ring Road merge
-    ],
+    "Route 1 — Sardar Patel Marg (SPM)": "28.5978,77.1842",
+    "Route 2 — Rao Tularam Marg (RTR)":  "28.5770,77.1648",
 }
 ROUTE_COLORS = {
     "Route 1 — Sardar Patel Marg (SPM)": "#1A73E8",
@@ -120,32 +110,19 @@ BAND_LABELS = {
 # ─────────────────────────────────────────────────────────────
 NETWORK = {
     "Route 1 — Sardar Patel Marg (SPM)": {
-        "avg_lanes":          3.9,
-        "avg_speed":          26.6,   # km/h — from traffic data
-        "std_dev_speed":      10.8,   # high variability
-        "signal_ratio":       0.53,
-        "intersection_ratio": 0.72,
-        "roadside_friction":  0.34,
-        "merge_points":       4,      # Udyog Bhawan, Sena Bhawan, Sardar Patel, DJ Expy merge
-        "diverge_points":     3,      # Patel Chowk, Dhaula Kuan, Shankar Vihar
-        "circularity":        1.15,   # relatively direct corridor
-        "total_length_km":    23.8,   # corrected from field data
-        "unreliable":         "Udyog Bhawan junction · Sena Bhawan Circle · "
-                              "Sardar Patel Marg · DJ Expressway merge",
+        "avg_lanes": 3.9, "avg_speed": 26.6, "std_dev_speed": 10.8,
+        "signal_ratio": 0.53, "intersection_ratio": 0.72,
+        "roadside_friction": 0.34, "merge_points": 4,
+        "circularity": 1.15, "total_length_km": 18.5,
+        "unreliable": "Junctions and merging zones",
         "color": "#1A73E8",
     },
     "Route 2 — Rao Tularam Marg (RTR)": {
-        "avg_lanes":          3.8,
-        "avg_speed":          28.2,   # km/h — slightly faster on average
-        "std_dev_speed":      8.4,    # lower variability — more reliable
-        "signal_ratio":       0.44,
-        "intersection_ratio": 0.78,
-        "roadside_friction":  0.41,
-        "merge_points":       3,      # Moti Bagh junction, RTR merge, NH-48 outer ring road
-        "diverge_points":     2,      # Vasant Kunj, NH-48 entry
-        "circularity":        1.45,   # more winding — loops via Moti Bagh
-        "total_length_km":    26.2,   # longer due to winding path
-        "unreliable":         "Moti Bagh junction · Outer Ring Road merge · NH-48 entry",
+        "avg_lanes": 3.8, "avg_speed": 28.2, "std_dev_speed": 8.4,
+        "signal_ratio": 0.44, "intersection_ratio": 0.78,
+        "roadside_friction": 0.41, "merge_points": 3,
+        "circularity": 1.45, "total_length_km": 20.1,
+        "unreliable": "Road links and outer ring road merge",
         "color": "#E8711A",
     },
 }
@@ -168,35 +145,29 @@ WEIGHTS = {
 # ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def fetch_route(route_name):
-    # Chain all waypoints: ORIGIN:wp1:wp2:wp3:DEST
-    via_points = WAYPOINTS[route_name]
-    via_str    = ":".join(via_points)
+    via = WAYPOINTS[route_name]
     url = (f"https://api.tomtom.com/routing/1/calculateRoute/"
-           f"{ORIGIN}:{via_str}:{DEST}/json"
+           f"{ORIGIN}:{via}:{DEST}/json"
            f"?key={TOMTOM_KEY}&traffic=true&travelMode=car"
            f"&routeType=fastest&routeRepresentation=polyline")
     try:
-        resp  = requests.get(url, timeout=10)
-        data  = resp.json()
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
         route = data["routes"][0]
         tt_min = round(route["summary"]["travelTimeInSeconds"] / 60, 1)
-        # Collect points across ALL legs (one leg per waypoint gap)
-        coords = []
-        for leg in route["legs"]:
-            coords += [[p["latitude"], p["longitude"]] for p in leg["points"]]
+        points = route["legs"][0]["points"] + route["legs"][1]["points"]
+        coords = [[p["latitude"], p["longitude"]] for p in points]
         return tt_min, coords
     except Exception:
         fallback_coords = {
             "Route 1 — Sardar Patel Marg (SPM)": [
-                [28.6270,77.2390],[28.6215,77.2195],[28.6128,77.2101],
-                [28.6052,77.2020],[28.5982,77.1952],[28.5870,77.1788],
-                [28.5760,77.1655],[28.5660,77.1490],[28.5598,77.1380],
-                [28.5480,77.1150],[28.5390,77.1050],[28.5290,77.0940]],
+                [28.6270,77.2390],[28.6198,77.2165],[28.6045,77.1921],
+                [28.5978,77.1842],[28.5788,77.1621],[28.5670,77.1430],
+                [28.5480,77.1170],[28.5290,77.0940]],
             "Route 2 — Rao Tularam Marg (RTR)": [
-                [28.6270,77.2390],[28.6215,77.2195],[28.6128,77.2101],
-                [28.5982,77.1952],[28.5940,77.1870],[28.5870,77.1760],
-                [28.5780,77.1620],[28.5700,77.1480],[28.5650,77.1330],
-                [28.5480,77.1150],[28.5390,77.1050],[28.5290,77.0940]],
+                [28.6270,77.2390],[28.6198,77.2165],[28.6045,77.1921],
+                [28.5988,77.1855],[28.5770,77.1648],[28.5598,77.1488],
+                [28.5420,77.1248],[28.5290,77.0940]],
         }
         fallback_tt = {
             "Route 1 — Sardar Patel Marg (SPM)": 49.0,
@@ -213,13 +184,10 @@ def fetch_route(route_name):
 def get_dynamic_bt(route_name, live_tt, band):
     bt_base  = BAND_NETWORK_BT[route_name][band]      # exact from Excel
     tt_base  = BAND_NETWORK_TT[route_name][band]      # network avg TT
-    # BT scales with live TT — more congested today = higher buffer demand
+    bti      = BAND_BTI[route_name][band]             # derived BTI = bt/tt
+    # Scale BT proportionally to how live TT differs from network avg TT
     bt_live  = round(bt_base * (live_tt / tt_base), 1)
-    # BTI recomputed from live values — truly dynamic
-    # If today's TT > network avg → bt_live rises → bti_live rises
-    # → route scores lower on reliability → recommendation adjusts
-    bti_live = round(bt_live / live_tt, 4) if live_tt > 0 else BAND_BTI[route_name][band]
-    return bt_live, bti_live
+    return bt_live, bti
 
 # ─────────────────────────────────────────────────────────────
 # SCORING ENGINE
@@ -621,15 +589,14 @@ with col_map:
                   <div style='font-size:12px;line-height:1.9'>
                   Score: <b>{r["score"]}/100</b><br>
                   Live travel time: <b>{r["live_tt"]} min</b><br>
-                  Live BTI ({BAND_LABELS[current_band]}): <b>{r["bti"]:.4f}</b><br>
-                  Network buffer demand (live): <b>{r["bt"]} min</b><br>
+                  BTI ({BAND_LABELS[current_band]}): <b>{r["bti"]:.4f}</b><br>
+                  Network buffer demand: <b>{r["bt"]} min</b><br>
                   Length: <b>{r["total_length_km"]} km</b><br>
                   Avg speed: <b>{r["avg_speed"]} km/h</b><br>
                   Signals: <b>{round(r["signal_ratio"]*100)}%</b><br>
                   Merge points: <b>{r["merge_points"]}</b><br>
-                  Diverge points: <b>{r.get("diverge_points","—")}</b><br>
                   Circularity: <b>{r["circularity"]}</b><br>
-                  Unreliable segments: <i>{r["unreliable"]}</i>
+                  Unreliable segment: <i>{r["unreliable"]}</i>
                   </div>
                 </div>
                 """, unsafe_allow_html=True)

@@ -21,11 +21,9 @@ TOMTOM_KEY = "imAYgDRcFJmRBP4UKTdxWdgQp6LqZ9Rg"
 ORIGIN     = "28.6270,77.2390"
 DEST       = "28.5290,77.0940"
 
-# FIX 1: More geographically separated waypoints so TomTom
-# draws clearly distinct routes on the map
 WAYPOINTS = {
-    "Route 1 — Sardar Patel Marg (SPM)": "28.5912,77.1765",  # Dhaula Kuan junction
-    "Route 2 — Rao Tularam Marg (RTR)":  "28.5712,77.1542",  # Vasant Vihar / RTR
+    "Route 1 — Sardar Patel Marg (SPM)": "28.5912,77.1765",
+    "Route 2 — Rao Tularam Marg (RTR)":  "28.5712,77.1542",
 }
 ROUTE_COLORS = {
     "Route 1 — Sardar Patel Marg (SPM)": "#1A73E8",
@@ -33,7 +31,7 @@ ROUTE_COLORS = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# NETWORK BUFFER TIME — from BT_Summary sheets (Mon–Fri mean)
+# NETWORK DATA
 # ─────────────────────────────────────────────────────────────
 BAND_NETWORK_BT = {
     "Route 1 — Sardar Patel Marg (SPM)": {
@@ -45,7 +43,6 @@ BAND_NETWORK_BT = {
         "IP":  17.65, "EP":  25.11, "EAP": 10.90,
     },
 }
-
 BAND_NETWORK_TT = {
     "Route 1 — Sardar Patel Marg (SPM)": {
         "EMP": 35.87, "BMP": 43.88, "MP": 63.13,
@@ -56,12 +53,10 @@ BAND_NETWORK_TT = {
         "IP":  50.24, "EP":  57.57, "EAP": 43.32,
     },
 }
-
 MEASURED_BTI = {
     "Route 1 — Sardar Patel Marg (SPM)": 0.702,
     "Route 2 — Rao Tularam Marg (RTR)":  0.617,
 }
-
 BAND_BTI = {
     rname: {
         band: round(
@@ -93,9 +88,6 @@ BAND_LABELS = {
     "EAP": "Evening After Peak (20–24)",
 }
 
-# ─────────────────────────────────────────────────────────────
-# STATIC NETWORK ATTRIBUTES
-# ─────────────────────────────────────────────────────────────
 NETWORK = {
     "Route 1 — Sardar Patel Marg (SPM)": {
         "avg_lanes": 3.9, "avg_speed": 26.6, "std_dev_speed": 10.8,
@@ -105,6 +97,7 @@ NETWORK = {
         "unreliable": "Junctions and merging zones",
         "color": "#1A73E8",
         "name": "Route 1 — Sardar Patel Marg (SPM)",
+        "_live_tt": 49.0,
     },
     "Route 2 — Rao Tularam Marg (RTR)": {
         "avg_lanes": 3.8, "avg_speed": 28.2, "std_dev_speed": 8.4,
@@ -114,12 +107,10 @@ NETWORK = {
         "unreliable": "Road links and outer ring road merge",
         "color": "#E8711A",
         "name": "Route 2 — Rao Tularam Marg (RTR)",
+        "_live_tt": 52.0,
     },
 }
 
-# ─────────────────────────────────────────────────────────────
-# FUZZY AHP WEIGHTS
-# ─────────────────────────────────────────────────────────────
 WEIGHTS = {
     "buffer_kept":      0.284,
     "commuter_type":    0.253,
@@ -131,7 +122,7 @@ WEIGHTS = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# TOMTOM — live TT fetch
+# TOMTOM
 # ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def fetch_route(route_name):
@@ -156,8 +147,8 @@ def fetch_route(route_name):
                 [28.5480,77.1170],[28.5290,77.0940]],
             "Route 2 — Rao Tularam Marg (RTR)": [
                 [28.6270,77.2390],[28.6198,77.2165],[28.6045,77.1921],
-                [28.5712,77.1542],[28.5598,77.1488],
-                [28.5420,77.1248],[28.5290,77.0940]],
+                [28.5712,77.1542],[28.5598,77.1388],
+                [28.5420,77.1148],[28.5290,77.0940]],
         }
         fallback_tt = {
             "Route 1 — Sardar Patel Marg (SPM)": 49.0,
@@ -165,9 +156,6 @@ def fetch_route(route_name):
         }
         return fallback_tt[route_name], fallback_coords[route_name]
 
-# ─────────────────────────────────────────────────────────────
-# DYNAMIC NETWORK BT
-# ─────────────────────────────────────────────────────────────
 def get_dynamic_bt(route_name, live_tt, band):
     bt_base = BAND_NETWORK_BT[route_name][band]
     tt_base = BAND_NETWORK_TT[route_name][band]
@@ -176,41 +164,52 @@ def get_dynamic_bt(route_name, live_tt, band):
     return bt_live, bti
 
 # ─────────────────────────────────────────────────────────────
-# FIX 2: SCORING ENGINE — relative BTI + distance score
+# SCORING ENGINE — TIME-BAND AWARE
+#
+# Key fix: band_rel_weight = mean BTI of current band
+#   EMP (BTI~0.15) → rel_weight=0.30 → speed dominates → SPM likely wins
+#   MP  (BTI~0.75) → rel_weight=0.82 → reliability dominates → RTR likely wins
+#   EP  (BTI~0.65) → rel_weight=0.72 → reliability still important
+#   EAP (BTI~0.29) → rel_weight=0.40 → balanced, SPM speed advantage helps
+#
+# This means the SAME user gets different recommendations at different times
+# which is the correct real-world behaviour
 # ─────────────────────────────────────────────────────────────
 def score_route(route, user, tt, bt, bti, band):
-    w    = WEIGHTS
-    s    = {}
-    circ = route["circularity"]
-    leng = route["total_length_km"]
+    w     = WEIGHTS
+    s     = {}
+    circ  = route["circularity"]
     rname = route["name"]
 
-    # ── Relative BTI score (centred at 0.5 between both routes) ──────
-    # Small BTI diff (0.02–0.10) gives proportionate advantage, not dominant one
+    # ── Other route BTI for comparison ───────────────────────────────
     other_name = [k for k in NETWORK if k != rname][0]
     bti_other  = BAND_BTI[other_name][band]
-    bti_mean   = (bti + bti_other) / 2
-    rel_score  = max(0.15, min(0.85,
-        0.5 + (bti_mean - bti) / (bti_mean * 2 + 0.001) * 0.4
-    ))
 
-    # ── Relative speed score (centred at 0.5 between both routes) ─────
-    tt_other  = NETWORK[other_name].get("_live_tt", 52.0 if "SPM" in rname else 49.0)
-    tt_mean   = (tt + tt_other) / 2
-    spd_score = max(0.15, min(0.85,
-        0.5 + (tt_mean - tt) / (tt_mean * 2 + 0.001) * 0.4
-    ))
+    # ── rel_score: RTR=0.66, SPM=0.30 (consistent across bands) ─────
+    max_bti   = max(bti, bti_other)
+    rel_raw   = 1 - (bti / max_bti)           # SPM≈0.0, RTR≈0.12
+    rel_score = max(0.25, min(0.75, 0.30 + rel_raw * 3.0))
 
-    # ── Directness — SPM wins (circ 1.15 vs RTR 1.45) ─────────────────
-    circ_n    = min(circ, 2.0) / 2.0
-    dir_score = 1 - circ_n          # SPM=0.425, RTR=0.275
+    # ── spd_score: SPM=0.59, RTR=0.30 (based on live TT) ────────────
+    tt_other  = NETWORK[other_name]["_live_tt"]
+    max_tt    = max(tt, tt_other)
+    spd_raw   = 1 - (tt / max_tt)             # SPM≈0.058, RTR≈0.0
+    spd_score = max(0.25, min(0.75, 0.30 + spd_raw * 5.0))
 
-    # ── Distance — SPM wins (18.5 km vs 20.1 km) ──────────────────────
-    dist_score = 1 - (leng / 25.0)  # SPM=0.260, RTR=0.196
+    # ── dir_score: SPM=0.425, RTR=0.275 ──────────────────────────────
+    dir_score = 1 - min(circ, 2.0) / 2.0
 
-    # ── Buffer demand ──────────────────────────────────────────────────
-    bt_n      = min(bt, 40) / 40
-    buf_score = 1 - bt_n
+    # ── buf_score: lower demand = better ──────────────────────────────
+    buf_score = 1 - min(bt, 40) / 40
+
+    # ── TIME-BAND RELIABILITY WEIGHT ─────────────────────────────────
+    # This is the key fix: at high-BTI bands (MP/EP) reliability matters
+    # more for everyone; at low-BTI bands (EMP/EAP) speed matters more.
+    # band_bti_mean = average absolute BTI level of current band
+    band_bti_mean = (bti + bti_other) / 2
+    # Scale: BTI=0.15 (EMP) → rel_weight=0.30, BTI=0.75 (MP) → rel_weight=0.82
+    band_rel_weight = max(0.30, min(0.85, band_bti_mean * 1.10))
+    band_spd_weight = 1.0 - band_rel_weight
 
     # ── Buffer Kept (w=0.284) ─────────────────────────────────────────
     if user["buffer_kept"] == "Yes":
@@ -222,15 +221,17 @@ def score_route(route, user, tt, bt, bti, band):
         else:
             s["buffer_kept"] = max(0.0, buf_score + gap / 40.0)
     else:
-        s["buffer_kept"] = 0.5 * spd_score + 0.3 * dir_score + 0.2 * dist_score
+        s["buffer_kept"] = band_spd_weight * spd_score + band_rel_weight * buf_score
 
     # ── Commuter Type (w=0.253) ───────────────────────────────────────
-    # Regular: reliability + speed + corridor familiarity (SPM shorter/known)
-    # Non-regular: directness + distance (unfamiliar, want simple route)
+    # At MP/EP: reliability critical for everyone → RTR
+    # At EMP/EAP: speed/directness matter more → SPM
     if user["commuter_type"] == "Regular":
-        s["commuter_type"] = 0.55 * rel_score + 0.25 * spd_score + 0.20 * dist_score
+        s["commuter_type"] = band_rel_weight * rel_score + band_spd_weight * spd_score
     else:
-        s["commuter_type"] = 0.30 * rel_score + 0.40 * dir_score + 0.30 * dist_score
+        s["commuter_type"] = (band_rel_weight * 0.7) * rel_score + \
+                             (band_spd_weight * 0.5) * dir_score + \
+                             (band_spd_weight * 0.5) * spd_score
 
     # ── Buffer Time (w=0.177) ─────────────────────────────────────────
     gap2 = user["buffer_time_min"] - bt
@@ -243,36 +244,64 @@ def score_route(route, user, tt, bt, bti, band):
         "Habitual — stays on known route": 0.15,
     }
     fw = follow_rel.get(user["route_following"], 0.5)
-    s["route_following"] = fw * rel_score + (1 - fw) * (0.5 * dir_score + 0.5 * dist_score)
+    # At peak bands, even habitual users benefit from reliability
+    fw_adj = min(0.95, fw + band_rel_weight * 0.15)
+    s["route_following"] = fw_adj * rel_score + \
+                           (1 - fw_adj) * (0.6 * spd_score + 0.4 * dir_score)
 
     # ── Trip Purpose (w=0.111) ────────────────────────────────────────
+    # At peak bands: work trips care more about reliability
+    # At off-peak: speed matters more for all purposes
     purpose_map = {
-        "Work":           0.40 * spd_score + 0.40 * rel_score + 0.20 * dist_score,
-        "Education":      0.20 * spd_score + 0.70 * rel_score + 0.10 * dist_score,
-        "Medical":        0.70 * spd_score + 0.20 * rel_score + 0.10 * dist_score,
-        "Social/Leisure": 0.30 * spd_score + 0.20 * rel_score + 0.50 * dir_score,
+        "Work": (
+            (0.35 + band_rel_weight * 0.2) * rel_score +
+            (0.65 - band_rel_weight * 0.2) * spd_score
+        ),
+        "Education": (
+            (0.20 + band_rel_weight * 0.3) * spd_score +
+            (0.80 - band_rel_weight * 0.1) * rel_score
+        ),
+        "Medical": (
+            (0.80 - band_rel_weight * 0.2) * spd_score +
+            (0.20 + band_rel_weight * 0.2) * rel_score
+        ),
+        "Social/Leisure": (
+            0.35 * spd_score + 0.25 * rel_score + 0.40 * dir_score
+        ),
     }
     s["trip_purpose"] = purpose_map.get(user["trip_purpose"], 0.5)
 
     # ── Delay Threshold (w=0.066) ─────────────────────────────────────
-    # Low tolerance → reliability critical → RTR advantage
-    # High tolerance → speed + distance → SPM advantage
+    # At peak bands, low-threshold users care even more about reliability
     thresh_rel = {
         "1–2 min": 0.90, "2–5 min": 0.65,
         "5–10 min": 0.35, "More than 10 min": 0.10,
     }
-    tr = thresh_rel.get(user["delay_threshold"], 0.5)
-    s["delay_threshold"] = tr * rel_score + (1 - tr) * (0.55 * spd_score + 0.45 * dist_score)
+    tr    = thresh_rel.get(user["delay_threshold"], 0.5)
+    tr_adj = min(0.95, tr * (1 + band_rel_weight * 0.3))
+    s["delay_threshold"] = tr_adj * rel_score + (1 - tr_adj) * spd_score
 
     # ── Occupation (w=0.066) ──────────────────────────────────────────
-    # Cab driver → speed + distance dominant (time = money, knows SPM)
-    # Student → reliability (fixed schedule)
+    # Cab drivers: speed always dominant regardless of band
+    # Students: reliability dominant, amplified at peak
     occ_map = {
-        "Working Professional":    0.35 * spd_score + 0.50 * rel_score + 0.15 * dist_score,
-        "Cab / Commercial Driver": 0.55 * spd_score + 0.15 * rel_score + 0.30 * dist_score,
-        "Student":                 0.15 * spd_score + 0.75 * rel_score + 0.10 * dist_score,
-        "Self-employed":           0.35 * spd_score + 0.25 * rel_score + 0.40 * dir_score,
-        "Homemaker":               0.25 * spd_score + 0.25 * rel_score + 0.50 * dir_score,
+        "Working Professional": (
+            (0.35 + band_rel_weight * 0.1) * rel_score +
+            (0.65 - band_rel_weight * 0.1) * spd_score
+        ),
+        "Cab / Commercial Driver": (
+            0.75 * spd_score + 0.25 * rel_score
+        ),
+        "Student": (
+            (0.20) * spd_score +
+            (0.80 + band_rel_weight * 0.05) * rel_score
+        ),
+        "Self-employed": (
+            0.45 * spd_score + 0.30 * rel_score + 0.25 * dir_score
+        ),
+        "Homemaker": (
+            0.30 * spd_score + 0.30 * rel_score + 0.40 * dir_score
+        ),
     }
     s["occupation"] = occ_map.get(user["occupation"], 0.5)
 
@@ -285,7 +314,6 @@ def score_route(route, user, tt, bt, bti, band):
 # ─────────────────────────────────────────────────────────────
 def show_buffer_gap_panel(routes_scored, user_buf, buffer_kept):
     st.subheader("🕐 Buffer Time: Kept vs Network Demand")
-
     if buffer_kept == "No":
         st.info("You chose not to keep buffer time. Network buffer demand shown for reference.")
         user_buf = 0
@@ -295,7 +323,6 @@ def show_buffer_gap_panel(routes_scored, user_buf, buffer_kept):
         net_bt = r["bt"]
         gap    = round(user_buf - net_bt, 1)
         pct    = round((user_buf / net_bt * 100) if net_bt > 0 else 0)
-
         if gap >= 0:
             status = "✅ Sufficient buffer"
             sc = "#155724"; bg = "#d4edda"; gs = f"+{gap} min surplus"
@@ -305,7 +332,6 @@ def show_buffer_gap_panel(routes_scored, user_buf, buffer_kept):
         else:
             status = "❌ Under-buffered — delay risk"
             sc = "#721c24"; bg = "#f8d7da"; gs = f"{gap} min deficit"
-
         with col:
             st.markdown(f"""
             <div style='background:{bg};border-radius:10px;padding:14px 16px;margin-bottom:8px'>
@@ -320,8 +346,7 @@ def show_buffer_gap_panel(routes_scored, user_buf, buffer_kept):
                 Coverage:&nbsp;<b>{pct}%</b> of demand met
               </div>
               <div style='margin-top:8px;font-size:12px;font-weight:700;color:{sc}'>{status}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            </div>""", unsafe_allow_html=True)
 
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -380,13 +405,13 @@ st.caption("Mandi House → IFFCO Chowk  ·  Real-time TomTom Travel Time  ·  F
 current_band = get_time_band()
 ist          = pytz.timezone("Asia/Kolkata")
 current_time = datetime.now(ist).strftime("%I:%M %p")
-
 st.info(f"🕐 Current IST time: **{current_time}** → Active band: **{BAND_LABELS[current_band]}** "
         f"— network BTI and buffer demand are set accordingly.")
 
 for k in ["results", "route_data", "user_buf", "buf_kept"]:
     if k not in st.session_state:
-        st.session_state[k] = None if k in ["results", "route_data"] else (15 if k == "user_buf" else "Yes")
+        st.session_state[k] = None if k in ["results", "route_data"] \
+                               else (15 if k == "user_buf" else "Yes")
 
 col_form, col_map = st.columns([1, 1.6], gap="large")
 
@@ -423,7 +448,6 @@ with col_form:
     st.divider()
     run = st.button("🔍 Find best route", type="primary", use_container_width=True)
 
-# Fetch route data
 if st.session_state.route_data is None:
     with st.spinner("Loading live route data from TomTom..."):
         route_data = {}
@@ -448,7 +472,6 @@ with col_map:
             "buffer_time_min": buffer_time_min if buffer_kept == "Yes" else 0,
         }
 
-        # Store live TT in NETWORK dict so score_route can access other route TT
         for rname in NETWORK:
             live_tt_r, _ = route_data[rname]
             NETWORK[rname]["_live_tt"] = live_tt_r
@@ -457,10 +480,8 @@ with col_map:
         for rname, rdata in NETWORK.items():
             live_tt, coords = route_data[rname]
             bt, bti = get_dynamic_bt(rname, live_tt, current_band)
-            entry = {**rdata, "name": rname,
-                     "live_tt": live_tt, "bti": bti,
-                     "bt": bt, "coords": coords}
-            # FIX 3: pass band into score_route
+            entry = {**rdata, "name": rname, "live_tt": live_tt,
+                     "bti": bti, "bt": bt, "coords": coords}
             score, breakdown = score_route(entry, user, live_tt, bt, bti, current_band)
             entry.update({"score": score, "breakdown": breakdown})
             routes_scored.append(entry)
@@ -491,8 +512,7 @@ with col_map:
             Network Buffer Demand: {best["bt"]} min &nbsp;|&nbsp;
             BTI ({BAND_LABELS[current_band]}): {best["bti"]:.4f}
           </div>
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
 
         st.subheader("Route comparison")
         fig = go.Figure(go.Bar(
@@ -519,9 +539,11 @@ with col_map:
                     delta=f"BTI {r['bti']:.4f} · Buffer demand {r['bt']} min"
                 )
 
-        show_buffer_gap_panel(routes_scored,
-                              st.session_state.user_buf,
-                              st.session_state.buf_kept)
+        show_buffer_gap_panel(
+            routes_scored,
+            st.session_state.user_buf,
+            st.session_state.buf_kept
+        )
 
         with st.expander("📈 BTI across all time bands — both routes"):
             bands_order = ["EMP", "BMP", "MP", "IP", "EP", "EAP"]
@@ -585,11 +607,10 @@ with col_map:
                   Circularity: <b>{r["circularity"]}</b><br>
                   Unreliable segment: <i>{r["unreliable"]}</i>
                   </div>
-                </div>
-                """, unsafe_allow_html=True)
+                </div>""", unsafe_allow_html=True)
 
         with st.expander("📊 Fuzzy AHP score breakdown"):
-            bd = best["breakdown"]
+            bd       = best["breakdown"]
             labels   = [k.replace("_", " ").title() for k in bd]
             contribs = [bd[k] * WEIGHTS[k] * 100 for k in bd]
             fig2 = go.Figure(go.Bar(
